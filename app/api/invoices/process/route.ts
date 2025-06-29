@@ -38,11 +38,11 @@ export async function POST(req: NextRequest) {
     const parsedData = await parser.parseFile(file)
     
     // Get company data
-    const { data: profile } =  await supabase.from('profiles').select('*').eq('id', user.id).single()
-    //   .from('profiles')
-    //   .select('*')
-    //   .eq('id', user.id)
-    //   .single()
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single()
     
     // Generate InvoiceNow XML
     const generator = new InvoiceNowGenerator()

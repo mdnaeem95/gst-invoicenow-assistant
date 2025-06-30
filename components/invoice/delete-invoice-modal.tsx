@@ -16,6 +16,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { deleteInvoice } from '@/app/actions/invoice-actions'
 
 interface DeleteInvoiceModalProps {
   invoiceId: string
@@ -25,24 +26,31 @@ interface DeleteInvoiceModalProps {
 
 export function DeleteInvoiceModal({ invoiceId, invoiceNumber, variant = 'default' }: DeleteInvoiceModalProps) {
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isOpen, setIsOpen] = useState(false)
   const router = useRouter()
 
   const handleDelete = async () => {
+    console.log('Starting delete for invoice:', invoiceId)
     setIsDeleting(true)
     
     try {
-      const response = await fetch(`/api/invoices/${invoiceId}`, {
-        method: 'DELETE',
-      })
-
-      const result = await response.json()
+      const result = await deleteInvoice(invoiceId)
+      console.log('Delete result:', result)
 
       if (result.success) {
         toast.success('Invoice deleted', {
           description: `Invoice ${invoiceNumber} has been deleted successfully`,
         })
-        router.push('/invoices')
-        router.refresh()
+        setIsOpen(false)
+        
+        // Force a hard refresh to see the changes
+        setTimeout(() => {
+          if (window.location.pathname.includes(`/invoices/${invoiceId}`)) {
+            window.location.href = '/invoices'
+          } else {
+            window.location.reload()
+          }
+        }, 500)
       } else {
         throw new Error(result.error || 'Failed to delete invoice')
       }
@@ -57,19 +65,19 @@ export function DeleteInvoiceModal({ invoiceId, invoiceNumber, variant = 'defaul
   }
 
   const triggerButton = variant === 'dropdown' ? (
-    <div className="flex items-center text-red-600 cursor-pointer w-full ml-2 text-s mt-1">
+    <div className="flex items-center text-red-600 cursor-pointer w-full">
       <Trash2 className="h-4 w-4 mr-2" />
       Delete
     </div>
   ) : (
-    <Button variant="destructive" size="sm" className='w-full justify-start'>
+    <Button variant="destructive" size="sm">
       <Trash2 className="h-4 w-4 mr-2" />
       Delete Invoice
     </Button>
   )
 
   return (
-    <AlertDialog>
+    <AlertDialog open={isOpen} onOpenChange={setIsOpen}>
       <AlertDialogTrigger asChild>
         {triggerButton}
       </AlertDialogTrigger>
@@ -78,11 +86,11 @@ export function DeleteInvoiceModal({ invoiceId, invoiceNumber, variant = 'defaul
           <AlertDialogTitle>Delete Invoice</AlertDialogTitle>
           <AlertDialogDescription>
             Are you sure you want to delete invoice <strong>{invoiceNumber}</strong>? 
-            This action cannot be undone.
+            This action cannot be undone and will also delete all associated files.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
           <AlertDialogAction
             onClick={handleDelete}
             disabled={isDeleting}

@@ -57,12 +57,12 @@ export function DeleteInvoiceModal({ invoiceId, invoiceNumber, variant = 'defaul
   }
 
   const triggerButton = variant === 'dropdown' ? (
-    <div className="flex items-center text-red-600 cursor-pointer w-full">
+    <div className="flex items-center text-red-600 cursor-pointer w-full ml-2 text-s mt-1">
       <Trash2 className="h-4 w-4 mr-2" />
       Delete
     </div>
   ) : (
-    <Button variant="destructive" size="sm">
+    <Button variant="destructive" size="sm" className='w-full justify-start'>
       <Trash2 className="h-4 w-4 mr-2" />
       Delete Invoice
     </Button>

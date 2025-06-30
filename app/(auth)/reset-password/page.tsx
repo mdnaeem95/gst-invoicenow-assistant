@@ -31,68 +31,11 @@ export default function ResetPasswordPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
-  const [validToken, setValidToken] = useState<boolean | null>(null) // null = checking, true = valid, false = invalid
   const [passwordStrength, setPasswordStrength] = useState(0)
   const [touched, setTouched] = useState({ password: false, confirmPassword: false })
   
   const router = useRouter()
   const supabase = createClient()
-
-  // Check if the reset token is valid
-  useEffect(() => {
-    const validateToken = async () => {
-      try {
-        // First check URL hash for recovery token
-        const hashParams = new URLSearchParams(window.location.hash.substring(1))
-        const accessToken = hashParams.get('access_token')
-        const type = hashParams.get('type')
-        
-        if (accessToken && type === 'recovery') {
-          // Token found in URL - this is a valid reset link
-          setValidToken(true)
-          
-          // Set the session with the recovery token
-          const { error } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: hashParams.get('refresh_token') || '',
-          })
-          
-          if (error) {
-            console.error('Error setting session:', error)
-            setValidToken(false)
-          }
-        } else {
-          // No token in URL - check if there's an existing session
-          const { data: { session }, error } = await supabase.auth.getSession()
-          
-          // Check if we have a session at all
-          if (!session || error) {
-            setValidToken(false)
-          } else {
-            // We have a session, but need to verify it's for password recovery
-            // The presence of a session after clicking reset link indicates valid recovery
-            setValidToken(true)
-          }
-        }
-      } catch (err) {
-        console.error('Error validating token:', err)
-        setValidToken(false)
-      }
-    }
-    
-    validateToken()
-    
-    // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'PASSWORD_RECOVERY') {
-        setValidToken(true)
-      } else if (event === 'USER_UPDATED') {
-        setSuccess(true)
-      }
-    })
-    
-    return () => subscription.unsubscribe()
-  }, [supabase])
 
   // Calculate password strength
   useEffect(() => {
@@ -140,15 +83,13 @@ export default function ResetPasswordPage() {
       })
 
       if (error) {
-        if (error.message.includes('expired')) {
-          setError('This reset link has expired. Please request a new one.')
-          setValidToken(false)
-        } else {
-          setError(error.message)
-        }
+        setError(error.message)
       } else {
         setSuccess(true)
         toast.success('Password updated successfully!')
+        
+        // Sign out to ensure clean state
+        await supabase.auth.signOut()
         
         // Redirect to login after 3 seconds
         setTimeout(() => {
@@ -160,54 +101,6 @@ export default function ResetPasswordPage() {
     } finally {
       setLoading(false)
     }
-  }
-
-  // Loading state while checking token
-  if (validToken === null) {
-    return (
-      <div className="flex items-center justify-center min-h-screen p-4 bg-gray-50">
-        <Card className="w-full max-w-md">
-          <CardContent className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
-
-  // Invalid or expired token state
-  if (validToken === false) {
-    return (
-      <div className="flex items-center justify-center min-h-screen p-4 bg-gray-50">
-        <Card className="w-full max-w-md">
-          <CardHeader className="text-center">
-            <div className="mx-auto w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-4">
-              <XCircle className="h-6 w-6 text-red-600" />
-            </div>
-            <CardTitle className="text-2xl font-bold">Invalid or Expired Link</CardTitle>
-            <CardDescription>
-              This password reset link is invalid or has expired
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Alert>
-              <Info className="h-4 w-4" />
-              <AlertDescription>
-                Password reset links expire after 1 hour for security reasons. Please request a new reset link.
-              </AlertDescription>
-            </Alert>
-          </CardContent>
-          <CardFooter className="flex flex-col gap-3">
-            <Link href="/forgot-password" className="w-full">
-              <Button className="w-full">Request new reset link</Button>
-            </Link>
-            <Link href="/login" className="w-full">
-              <Button variant="ghost" className="w-full">Back to login</Button>
-            </Link>
-          </CardFooter>
-        </Card>
-      </div>
-    )
   }
 
   // Success state
@@ -376,7 +269,7 @@ export default function ResetPasswordPage() {
             </div>
           </CardContent>
 
-          <CardFooter className="flex flex-col gap-3">
+          <CardFooter className="flex flex-col gap-3 mt-4">
             <Button
               type="submit"
               className="w-full"

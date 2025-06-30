@@ -6,16 +6,47 @@ export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
   const next = searchParams.get('next') ?? '/dashboard'
+  const error = searchParams.get('error')
+  const error_description = searchParams.get('error_description')
+
+  // Handle errors
+  if (error) {
+    console.error('Auth callback error:', error, error_description)
+    return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent(error_description || error)}`)
+  }
 
   if (code) {
     const supabase = await createClient()
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
-    if (!error) {
-      // URL to redirect to after sign in process completes
+    
+    // Exchange the code for a session
+    const { data, error: sessionError } = await supabase.auth.exchangeCodeForSession(code)
+    
+    if (!sessionError && data?.session) {
+      // Check if this is a password recovery session
+      // When it's a recovery, we should redirect to reset-password page
+      const isRecovery = searchParams.get('type') === 'recovery' || 
+                        data.session.user?.app_metadata?.provider === 'email' &&
+                        data.session.user?.app_metadata?.providers?.includes('email')
+
+      if (isRecovery || next === '/reset-password') {
+        // This is a password reset flow
+        const forwardUrl = new URL(`${origin}/reset-password`)
+        
+        // Forward the access token and type in the hash fragment
+        // This is how Supabase expects it for password reset
+        forwardUrl.hash = `access_token=${data.session.access_token}&refresh_token=${data.session.refresh_token}&expires_in=3600&token_type=bearer&type=recovery`
+        
+        return NextResponse.redirect(forwardUrl)
+      }
+      
+      // Regular sign in - redirect to intended destination
       return NextResponse.redirect(`${origin}${next}`)
     }
+    
+    // Session exchange failed
+    console.error('Session exchange error:', sessionError)
   }
 
-  // Return to login with error
+  // Return to login with error if no code or exchange failed
   return NextResponse.redirect(`${origin}/login?error=auth_failed`)
 }

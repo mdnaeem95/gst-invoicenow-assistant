@@ -1,7 +1,10 @@
+// app/(auth)/register/page.tsx
 'use client'
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
 import { 
   Building2, 
   Mail, 
@@ -13,7 +16,9 @@ import {
   ArrowLeft,
   Check,
   Shield,
-  CreditCard
+  CreditCard,
+  AlertCircle,
+  CheckCircle
 } from 'lucide-react';
 
 interface FormData {
@@ -40,7 +45,7 @@ interface FormErrors {
   agreeToTerms?: string;
 }
 
-export default function ImprovedRegistrationPage() {
+export default function RegisterPage() {
   const [currentStep, setCurrentStep] = useState(1);
   const [formData, setFormData] = useState<FormData>({
     companyName: '',
@@ -55,16 +60,26 @@ export default function ImprovedRegistrationPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
+  const [globalError, setGlobalError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
   const [touched, setTouched] = useState<Partial<Record<keyof FormData, boolean>>>({});
   const [passwordStrength, setPasswordStrength] = useState(0);
-  const [uenSuggestion, setUenSuggestion] = useState('');
+  
+  const router = useRouter();
+  const supabase = createClient();
+
+  // Check if Supabase is initialized
+  useEffect(() => {
+    console.log('Supabase client initialized:', !!supabase);
+    console.log('Environment check:', {
+      url: process.env.NEXT_PUBLIC_SUPABASE_URL ? 'Set' : 'Missing',
+      anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'Set' : 'Missing',
+    });
+  }, []);
 
   // UEN validation and formatting
   const formatUEN = (value: string) => {
-    // Remove all non-alphanumeric characters
     const cleaned = value.toUpperCase().replace(/[^0-9A-Z]/g, '');
-    
-    // Format as 123456789A
     if (cleaned.length >= 9) {
       return cleaned.slice(0, 9) + cleaned.slice(9, 10);
     }
@@ -75,12 +90,10 @@ export default function ImprovedRegistrationPage() {
   const formatGST = (value: string) => {
     const cleaned = value.toUpperCase().replace(/[^0-9A-Z-]/g, '');
     
-    // Auto-add GST prefix if not present
     if (cleaned && !cleaned.startsWith('GST') && !cleaned.startsWith('M')) {
       return 'GST' + cleaned;
     }
     
-    // Format M2-1234567-8 pattern
     if (cleaned.startsWith('M') && cleaned.length > 2) {
       const parts = cleaned.match(/^(M\d)(\d{0,7})(\d{0,1})$/);
       if (parts) {
@@ -161,15 +174,70 @@ export default function ImprovedRegistrationPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('=== REGISTRATION STARTED ===');
+    console.log('Form data:', formData);
     
-    if (!validateStep(3)) return;
+    if (!validateStep(3)) {
+      console.log('Validation failed at step 3');
+      return;
+    }
     
     setLoading(true);
-    // Simulate API call
-    setTimeout(() => {
+    setGlobalError(null);
+
+    try {
+      // Create the user account
+      console.log('Calling Supabase signUp...');
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          data: {
+            company_name: formData.companyName,
+            company_uen: formData.uen,
+            contact_name: formData.companyName,
+          },
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        }
+      });
+
+      console.log('SignUp response:', { authData, authError });
+
+      if (authError) {
+        console.error('SignUp error:', authError);
+        if (authError.message.includes('already registered')) {
+          setGlobalError('This email is already registered. Please sign in instead.');
+        } else {
+          setGlobalError(authError.message);
+        }
+        setLoading(false);
+        return;
+      }
+
+      if (authData?.user) {
+        console.log('User created successfully:', authData.user.id);
+        
+        // If GST number provided, update the profile
+        if (formData.gstNumber) {
+          console.log('Updating GST number...');
+          const { error: updateError } = await supabase
+            .from('profiles')
+            .update({ gst_number: formData.gstNumber })
+            .eq('id', authData.user.id);
+          
+          if (updateError) {
+            console.error('Failed to update GST number:', updateError);
+            // Don't fail the registration for this
+          }
+        }
+        
+        setSuccess(true);
+      }
+    } catch (err) {
+      console.error('Unexpected error:', err);
+      setGlobalError('An unexpected error occurred. Please try again.');
       setLoading(false);
-      // Handle success
-    }, 2000);
+    }
   };
 
   const handleFieldChange = (field: keyof FormData, value: any) => {
@@ -177,7 +245,7 @@ export default function ImprovedRegistrationPage() {
     setTouched(prev => ({ ...prev, [field]: true }));
     
     // Clear error when user types
-    //@ts-ignore
+    // @ts-ignore
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: undefined }));
     }
@@ -194,6 +262,42 @@ export default function ImprovedRegistrationPage() {
     { number: 2, title: 'Account Setup' },
     { number: 3, title: 'Complete' }
   ];
+
+  // Success state
+  if (success) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-white rounded-lg shadow-lg p-8">
+          <div className="text-center">
+            <div className="mx-auto w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
+              <CheckCircle className="h-10 w-10 text-green-600" />
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Check your email!</h2>
+            <p className="text-gray-600 mb-6">
+              We've sent a confirmation link to <strong>{formData.email}</strong>
+            </p>
+            <div className="bg-blue-50 rounded-lg p-4 mb-6">
+              <p className="text-sm text-blue-900">
+                Please click the link in the email to confirm your account. The link will expire in 24 hours.
+              </p>
+            </div>
+            <p className="text-sm text-gray-600">
+              Didn't receive the email? Check your spam folder or{' '}
+              <button 
+                onClick={() => window.location.reload()} 
+                className="text-blue-600 hover:underline"
+              >
+                try again
+              </button>
+            </p>
+            <Link href="/login" className="inline-block mt-6 text-blue-600 hover:underline">
+              Go to login →
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
@@ -247,6 +351,14 @@ export default function ImprovedRegistrationPage() {
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-white py-8 px-4 shadow-lg sm:rounded-lg sm:px-10">
+          {/* Global Error */}
+          {globalError && currentStep === 3 && (
+            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 flex items-start gap-2">
+              <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+              <p className="text-sm text-red-700">{globalError}</p>
+            </div>
+          )}
+
           {/* Step 1: Company Information */}
           {currentStep === 1 && (
             <div className="space-y-6">
@@ -425,17 +537,6 @@ export default function ImprovedRegistrationPage() {
                         style={{ width: `${passwordStrength}%` }}
                       />
                     </div>
-                    <ul className="mt-2 text-xs text-gray-600 space-y-1">
-                      <li className={formData.password.length >= 6 ? 'text-green-600' : ''}>
-                        • At least 6 characters
-                      </li>
-                      <li className={/[a-z]/.test(formData.password) && /[A-Z]/.test(formData.password) ? 'text-green-600' : ''}>
-                        • Mix of uppercase and lowercase
-                      </li>
-                      <li className={/\d/.test(formData.password) ? 'text-green-600' : ''}>
-                        • Include numbers
-                      </li>
-                    </ul>
                   </div>
                 )}
               </div>
@@ -463,7 +564,7 @@ export default function ImprovedRegistrationPage() {
 
           {/* Step 3: Terms and Complete */}
           {currentStep === 3 && (
-            <div className="space-y-6">
+            <form onSubmit={handleSubmit} className="space-y-6">
               <div>
                 <h3 className="text-lg font-medium text-gray-900">Almost done!</h3>
                 <p className="mt-1 text-sm text-gray-600">
@@ -543,7 +644,7 @@ export default function ImprovedRegistrationPage() {
                   Back
                 </button>
                 <button
-                  onClick={handleSubmit}
+                  type="submit"
                   disabled={loading || !formData.agreeToTerms}
                   className="flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -560,7 +661,7 @@ export default function ImprovedRegistrationPage() {
                   )}
                 </button>
               </div>
-            </div>
+            </form>
           )}
 
           {/* Login link */}

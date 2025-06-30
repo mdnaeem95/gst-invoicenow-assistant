@@ -41,7 +41,8 @@ export async function updateSession(request: NextRequest) {
   // Define protected routes that require authentication
   const isProtectedRoute = request.nextUrl.pathname.startsWith('/dashboard') ||
                           request.nextUrl.pathname.startsWith('/invoices') ||
-                          request.nextUrl.pathname.startsWith('/settings')
+                          request.nextUrl.pathname.startsWith('/settings') ||
+                          request.nextUrl.pathname.startsWith('/analytics')
 
   // Redirect to login if accessing protected route without auth
   if (!user && isProtectedRoute) {
@@ -51,10 +52,11 @@ export async function updateSession(request: NextRequest) {
   }
 
   // Redirect to dashboard if accessing auth routes while logged in
-  // But allow access to reset-password even when logged in (for password change)
+  // But ALWAYS allow access to reset-password (even when logged in, for password change)
   if (user && isAuthRoute && 
       !request.nextUrl.pathname.startsWith('/auth/callback') &&
-      !request.nextUrl.pathname.startsWith('/reset-password')) {
+      !request.nextUrl.pathname.startsWith('/reset-password') &&
+      !request.nextUrl.pathname.startsWith('/forgot-password')) {
     const url = request.nextUrl.clone()
     url.pathname = '/dashboard'
     return NextResponse.redirect(url)

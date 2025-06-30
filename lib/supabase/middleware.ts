@@ -34,6 +34,7 @@ export async function updateSession(request: NextRequest) {
   // Define public routes that don't require authentication
   const isAuthRoute = request.nextUrl.pathname.startsWith('/login') ||
                      request.nextUrl.pathname.startsWith('/register') ||
+                     request.nextUrl.pathname.startsWith('/forgot-password') ||
                      request.nextUrl.pathname.startsWith('/reset-password') ||
                      request.nextUrl.pathname.startsWith('/auth')
 
@@ -50,7 +51,10 @@ export async function updateSession(request: NextRequest) {
   }
 
   // Redirect to dashboard if accessing auth routes while logged in
-  if (user && isAuthRoute && !request.nextUrl.pathname.startsWith('/auth/callback')) {
+  // But allow access to reset-password even when logged in (for password change)
+  if (user && isAuthRoute && 
+      !request.nextUrl.pathname.startsWith('/auth/callback') &&
+      !request.nextUrl.pathname.startsWith('/reset-password')) {
     const url = request.nextUrl.clone()
     url.pathname = '/dashboard'
     return NextResponse.redirect(url)

@@ -1,119 +1,241 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 import { InvoiceParser } from '@/lib/services/invoice-parser'
 import { InvoiceNowGenerator } from '@/lib/services/invoicenow-generator'
-import { createClient } from '@/lib/supabase/server'
 
-export async function POST(req: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
-    const supabase = await createClient()
-    
-    // Check authentication
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    // Get form data
-    const formData = await req.formData()
+    // Get the uploaded file
+    const formData = await request.formData()
     const file = formData.get('file') as File
     
     if (!file) {
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+      return NextResponse.json(
+        { success: false, error: 'No file provided' },
+        { status: 400 }
+      )
     }
 
-    // Upload original file to Supabase Storage
-    const fileExt = file.name.split('.').pop()
-    const fileName = `${user.id}/${Date.now()}.${fileExt}`
+    // Validate file type
+    const allowedTypes = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel'
+    ]
     
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('invoices')
-      .upload(fileName, file)
-    
-    if (uploadError) {
-      throw uploadError
+    if (!allowedTypes.includes(file.type)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid file type. Please upload PDF or Excel files only.' },
+        { status: 400 }
+      )
     }
 
-    // Parse the invoice
-    const parser = new InvoiceParser()
-    const parsedData = await parser.parseFile(file)
+    // Validate file size (10MB limit)
+    if (file.size > 10 * 1024 * 1024) {
+      return NextResponse.json(
+        { success: false, error: 'File size exceeds 10MB limit' },
+        { status: 400 }
+      )
+    }
+
+    // Get authenticated user
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
     
-    // Get company data
+    if (!user || authError) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      )
+    }
+
+    // Get user profile for company data
     const { data: profile } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', user.id)
       .single()
-    
-    // Generate InvoiceNow XML
-    const generator = new InvoiceNowGenerator()
-    const xml = generator.generateXML(parsedData, {
-      name: profile.company_name,
-      uen: profile.uen,
-      gstNumber: profile.gst_number,
-      address: profile.address
-    })
-    
-    // Validate XML
-    const validation = generator.validateXML(xml)
-    
-    // Save XML to storage
-    const xmlFileName = `${user.id}/${Date.now()}.xml`
-    const { data: xmlUpload } = await supabase.storage
-      .from('converted')
-      .upload(xmlFileName, new Blob([xml], { type: 'text/xml' }))
-    
-    // Create invoice record
-    const { data: invoice, error: dbError } = await supabase
+
+    // Create invoice record with processing status
+    const { data: invoice, error: insertError } = await supabase
       .from('invoices')
       .insert({
         user_id: user.id,
-        invoice_number: parsedData.invoiceNumber || `INV-${Date.now()}`,
-        invoice_date: parsedData.invoiceDate || new Date().toISOString().split('T')[0],
-        due_date: parsedData.dueDate,
-        customer_name: parsedData.customerName || 'Unknown Customer',
-        customer_uen: parsedData.customerUEN,
-        subtotal: parsedData.subtotal || 0,
-        gst_amount: parsedData.gstAmount || 0,
-        total_amount: parsedData.totalAmount || 0,
-        status: validation.valid ? 'processing' : 'draft',
-        original_file_url: fileName,
-        converted_xml_url: xmlFileName,
-        error_message: validation.errors.join(', ')
+        status: 'processing',
+        original_filename: file.name,
+        invoice_number: `TEMP-${Date.now()}`, // Temporary number
+        invoice_date: new Date().toISOString().split('T')[0], // Default to today
+        customer_name: 'Processing...', // Temporary placeholder
+        subtotal: 0,
+        gst_amount: 0,
+        total_amount: 0,
       })
       .select()
       .single()
-    
-    if (dbError) {
-      throw dbError
+
+    if (!invoice || insertError) {
+      console.error('Failed to create invoice record:', insertError)
+      console.error('Insert error details:', insertError?.message, insertError?.details)
+      return NextResponse.json(
+        { success: false, error: `Failed to create invoice record: ${insertError?.message || 'Unknown error'}` },
+        { status: 500 }
+      )
     }
-    
-    // Insert line items
-    if (parsedData.items.length > 0) {
+
+    try {
+      // Convert file to buffer
+      const buffer = Buffer.from(await file.arrayBuffer())
+
+      // Upload original file to Supabase Storage
+      const originalFileName = `${user.id}/${invoice.id}/original-${file.name}`
+      const { error: uploadError } = await supabase.storage
+        .from('invoices')
+        .upload(originalFileName, buffer, {
+          contentType: file.type,
+          upsert: true
+        })
+
+      if (uploadError) {
+        console.error('Failed to upload original file:', uploadError)
+      } else {
+        // Get public URL
+        const { data: { publicUrl } } = supabase.storage
+          .from('invoices')
+          .getPublicUrl(originalFileName)
+
+        await supabase
+          .from('invoices')
+          .update({ original_file_url: publicUrl })
+          .eq('id', invoice.id)
+      }
+
+      // Parse the invoice
+      const parser = new InvoiceParser()
+      const parsedData = await parser.parseFile(buffer, file.name, file.type)
+      
+      console.log('Parsed invoice data:', parsedData)
+
+      // Ensure we have valid data before updating
+      const updateData: any = {
+        invoice_number: parsedData.invoiceNumber || invoice.invoice_number,
+        invoice_date: parsedData.invoiceDate || new Date().toISOString().split('T')[0],
+        status: 'draft',
+      }
+
+      // Only add optional fields if they have values
+      if (parsedData.dueDate) updateData.due_date = parsedData.dueDate
+      if (parsedData.customerName) updateData.customer_name = parsedData.customerName
+      if (parsedData.customerUEN) updateData.customer_uen = parsedData.customerUEN
+      if (typeof parsedData.subtotal === 'number') updateData.subtotal = parsedData.subtotal
+      if (typeof parsedData.gstAmount === 'number') updateData.gst_amount = parsedData.gstAmount
+      if (typeof parsedData.totalAmount === 'number') updateData.total_amount = parsedData.totalAmount
+
+      console.log('Update data:', updateData)
+
+      // Update invoice with parsed data
+      const { data: updatedInvoice, error: updateError } = await supabase
+        .from('invoices')
+        .update(updateData)
+        .eq('id', invoice.id)
+        .select()
+        .single()
+
+      if (updateError) {
+        console.error('Failed to update invoice:', updateError)
+        console.error('Update error details:', updateError.message, updateError.details, updateError.hint)
+        throw new Error(`Failed to update invoice data: ${updateError.message}`)
+      }
+
+      console.log('Invoice updated successfully:', updatedInvoice)
+
+      // Insert line items
+      if (parsedData.items.length > 0) {
+        const items = parsedData.items.map((item, index) => ({
+          invoice_id: invoice.id,
+          description: item.description,
+          quantity: item.quantity,
+          unit_price: item.unitPrice,
+          amount: item.amount,
+          gst_rate: 9, // Default Singapore GST rate
+          line_number: index + 1,
+        }))
+
+        const { error: itemsError } = await supabase
+          .from('invoice_items')
+          .insert(items)
+
+        if (itemsError) {
+          console.error('Failed to insert items:', itemsError)
+        }
+      }
+
+      // Generate InvoiceNow XML
+      const generator = new InvoiceNowGenerator()
+      const xmlContent = generator.generateXML(parsedData, {
+        name: profile?.company_name || 'Company Name',
+        uen: profile?.company_uen || '12345678A',
+        address: profile?.company_address || 'Company Address',
+        gstNumber: profile?.gst_number || 'GST12345678',
+      })
+
+      // Save XML file
+      const xmlFileName = `${user.id}/${invoice.id}/invoicenow-${parsedData.invoiceNumber}.xml`
+      const { error: xmlUploadError } = await supabase.storage
+        .from('invoices')
+        .upload(xmlFileName, Buffer.from(xmlContent), {
+          contentType: 'application/xml',
+          upsert: true
+        })
+
+      if (!xmlUploadError) {
+        const { data: { publicUrl: xmlUrl } } = supabase.storage
+          .from('invoices')
+          .getPublicUrl(xmlFileName)
+
+        await supabase
+          .from('invoices')
+          .update({ converted_xml_url: xmlUrl })
+          .eq('id', invoice.id)
+      }
+
+      return NextResponse.json({
+        success: true,
+        invoice: {
+          id: invoice.id,
+          invoice_number: parsedData.invoiceNumber,
+          status: 'draft',
+        },
+        parsedData,
+      })
+
+    } catch (processingError) {
+      console.error('Processing error:', processingError)
+      
+      // Update invoice status to failed
       await supabase
-        .from('invoice_items')
-        .insert(
-          parsedData.items.map(item => ({
-            invoice_id: invoice.id,
-            description: item.description,
-            quantity: item.quantity,
-            unit_price: item.unitPrice,
-            amount: item.amount,
-            gst_rate: 9.00
-          }))
-        )
+        .from('invoices')
+        .update({
+          status: 'failed',
+          error_message: processingError instanceof Error ? processingError.message : 'Processing failed'
+        })
+        .eq('id', invoice.id)
+
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: processingError instanceof Error ? processingError.message : 'Failed to process invoice'
+        },
+        { status: 500 }
+      )
     }
-    
-    return NextResponse.json({
-      success: true,
-      invoice,
-      validation,
-      parsedData
-    })
-    
+
   } catch (error) {
-    console.error('Invoice processing error:', error)
+    console.error('Unexpected error:', error)
     return NextResponse.json(
-      { error: 'Failed to process invoice' },
+      { 
+        success: false, 
+        error: 'An unexpected error occurred' 
+      },
       { status: 500 }
     )
   }

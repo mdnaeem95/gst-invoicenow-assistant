@@ -50,14 +50,22 @@ export class TextractService {
   private async uploadToS3(file: Buffer, fileName: string): Promise<string> {
     const key = `temp-invoices/${Date.now()}-${fileName}`
     
-    await s3Client.send(new PutObjectCommand({
-      Bucket: this.bucketName,
-      Key: key,
-      Body: file,
-      ContentType: 'application/pdf',
-    }))
+    try {
+      console.log('Uploading to S3:', this.bucketName, key)
+      
+      await s3Client.send(new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        Body: file,
+        ContentType: 'application/pdf',
+      }))
 
-    return key
+      console.log('S3 upload successful')
+      return key
+    } catch (error) {
+      console.error('S3 upload error:', error)
+      throw new Error(`Failed to upload to S3: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
   }
 
   /**
@@ -65,32 +73,61 @@ export class TextractService {
    */
   async extractInvoiceData(file: Buffer, fileName: string): Promise<ExtractedInvoiceData> {
     try {
-      // Upload to S3 first (Textract works better with S3)
-      const s3Key = await this.uploadToS3(file, fileName)
-
-      // Analyze document with Textract
-      const command = new AnalyzeDocumentCommand({
-        Document: {
-          S3Object: {
-            Bucket: this.bucketName,
-            Name: s3Key,
+      console.log('Starting Textract extraction for:', fileName)
+      
+      // Try direct document analysis first (without S3)
+      try {
+        console.log('Attempting direct Textract analysis...')
+        const command = new AnalyzeDocumentCommand({
+          Document: {
+            Bytes: file,
           },
-        },
-        FeatureTypes: ['FORMS', 'TABLES'],
-      })
+          FeatureTypes: ['FORMS', 'TABLES'],
+        })
 
-      const response = await textractClient.send(command)
-      
-      // Parse the Textract response
-      const extractedData = this.parseTextractResponse(response)
+        const response = await textractClient.send(command)
+        console.log('Direct Textract response received, blocks:', response.Blocks?.length)
+        
+        // Parse the Textract response
+        const extractedData = this.parseTextractResponse(response)
+        console.log('Extracted data:', extractedData)
+        
+        return extractedData
+      } catch (directError) {
+        console.log('Direct Textract failed, trying S3 method...', directError)
+        
+        // Fallback to S3 method
+        console.log('Bucket name:', this.bucketName)
+        
+        // Upload to S3 first (Textract works better with S3)
+        const s3Key = await this.uploadToS3(file, fileName)
+        console.log('S3 key:', s3Key)
 
-      // Clean up S3 file after processing
-      // Note: In production, you might want to keep this for audit purposes
-      
-      return extractedData
+        // Analyze document with Textract
+        const command = new AnalyzeDocumentCommand({
+          Document: {
+            S3Object: {
+              Bucket: this.bucketName,
+              Name: s3Key,
+            },
+          },
+          FeatureTypes: ['FORMS', 'TABLES'],
+        })
+
+        console.log('Sending Textract command...')
+        const response = await textractClient.send(command)
+        console.log('Textract response received, blocks:', response.Blocks?.length)
+        
+        // Parse the Textract response
+        const extractedData = this.parseTextractResponse(response)
+        console.log('Extracted data:', extractedData)
+
+        return extractedData
+      }
     } catch (error) {
       console.error('Textract error:', error)
-      throw new Error('Failed to extract invoice data')
+      console.error('Error details:', error instanceof Error ? error.stack : 'No stack trace')
+      throw new Error(`Failed to extract invoice data: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
   }
 
@@ -254,29 +291,48 @@ export class TextractService {
     const dateStr = this.findValue(keyValuePairs, possibleKeys)
     if (!dateStr) return undefined
 
-    // Try to parse common Singapore date formats
-    const formats = [
-      /(\d{1,2})[-/](\d{1,2})[-/](\d{4})/, // DD/MM/YYYY or DD-MM-YYYY
-      /(\d{4})[-/](\d{1,2})[-/](\d{1,2})/, // YYYY-MM-DD
-      /(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})/i, // DD MMM YYYY
-    ]
+    console.log('Found date string:', dateStr)
 
-    for (const format of formats) {
-      const match = dateStr.match(format)
-      if (match) {
-        // Convert to ISO format
-        try {
-          const date = new Date(dateStr)
-          if (!isNaN(date.getTime())) {
-            return date.toISOString().split('T')[0]
-          }
-        } catch (e) {
-          // Continue to next format
-        }
+    // Try to parse common Singapore date formats
+    // DD/MM/YYYY or DD-MM-YYYY
+    const ddmmyyyy = dateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/)
+    if (ddmmyyyy) {
+      const [, day, month, year] = ddmmyyyy
+      const formatted = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+      console.log('Formatted date:', formatted)
+      return formatted
+    }
+
+    // DD MMM YYYY (e.g., 29 Jun 2025)
+    const ddMmmYyyy = dateStr.match(/(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})/i)
+    if (ddMmmYyyy) {
+      const monthMap: Record<string, string> = {
+        'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+        'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+        'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+      }
+      const [, day, monthName, year] = ddMmmYyyy
+      const month = monthMap[monthName.toLowerCase()]
+      if (month) {
+        const formatted = `${year}-${month}-${day.padStart(2, '0')}`
+        console.log('Formatted date:', formatted)
+        return formatted
       }
     }
 
-    return dateStr // Return original if can't parse
+    // Try standard date parsing as last resort
+    try {
+      const date = new Date(dateStr)
+      if (!isNaN(date.getTime())) {
+        return date.toISOString().split('T')[0]
+      }
+    } catch (e) {
+      console.error('Date parsing failed:', e)
+    }
+
+    // Return undefined if can't parse
+    console.warn('Could not parse date:', dateStr)
+    return undefined
   }
 
   /**

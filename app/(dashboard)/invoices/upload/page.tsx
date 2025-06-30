@@ -37,7 +37,8 @@ export default function UploadPage() {
       }
     } catch (error) {
       console.error('Upload error:', error)
-      // Error is handled by the UploadZone component
+      // Show error to user
+      alert(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
       setIsProcessing(false)
     }

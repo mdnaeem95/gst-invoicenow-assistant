@@ -220,13 +220,38 @@ export default function RegisterPage() {
         // If GST number provided, update the profile
         if (formData.gstNumber) {
           console.log('Updating GST number...');
-          const { error: updateError } = await supabase
-            .from('profiles')
-            .update({ gst_number: formData.gstNumber })
-            .eq('id', authData.user.id);
           
-          if (updateError) {
-            console.error('Failed to update GST number:', updateError);
+          // Wait a moment for the profile to be created by the database trigger
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // Try to update the profile with retry logic
+          let retries = 3;
+          let updateSuccess = false;
+          
+          while (retries > 0 && !updateSuccess) {
+            const { error: updateError } = await supabase
+              .from('profiles')
+              .update({ 
+                gst_number: formData.gstNumber,
+                company_name: formData.companyName,
+                company_uen: formData.uen
+              })
+              .eq('id', authData.user.id);
+            
+            if (!updateError) {
+              updateSuccess = true;
+              console.log('Successfully updated profile with GST number');
+            } else {
+              console.error(`Failed to update GST number (attempt ${4 - retries}/3):`, updateError);
+              retries--;
+              if (retries > 0) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+              }
+            }
+          }
+          
+          if (!updateSuccess) {
+            console.error('Failed to update GST number after all retries');
             // Don't fail the registration for this
           }
         }

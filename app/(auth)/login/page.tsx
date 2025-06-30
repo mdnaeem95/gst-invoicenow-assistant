@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
 import { Mail, Lock, Eye, EyeOff, Loader2, AlertCircle, ArrowRight } from 'lucide-react';
 
 export default function ImprovedLoginPage() {
@@ -13,6 +15,26 @@ export default function ImprovedLoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{email?: string; password?: string}>({});
   const [touched, setTouched] = useState<{email?: boolean; password?: boolean}>({});
+  
+  const router = useRouter();
+  const supabase = createClient();
+
+  // Check for error messages in URL params
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const errorParam = urlParams.get('error');
+    
+    if (errorParam) {
+      if (errorParam === 'auth_failed') {
+        setError('Authentication failed. Please try again.');
+      } else {
+        setError(decodeURIComponent(errorParam));
+      }
+      
+      // Clean up URL
+      window.history.replaceState({}, '', '/login');
+    }
+  }, []);
 
   // Email validation
   const validateEmail = (email: string) => {
@@ -58,16 +80,54 @@ export default function ImprovedLoginPage() {
     setLoading(true);
     setError(null);
 
-    // Simulate API call
-    setTimeout(() => {
+    try {
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (signInError) {
+        if (signInError.message.includes('Invalid login credentials')) {
+          setError('Invalid email or password. Please try again.');
+        } else if (signInError.message.includes('Email not confirmed')) {
+          setError('Please check your email and confirm your account before signing in.');
+        } else {
+          setError(signInError.message);
+        }
+      } else if (data?.user) {
+        // Success - redirect to dashboard
+        router.push('/dashboard');
+        router.refresh();
+      }
+    } catch (err) {
+      setError('An unexpected error occurred. Please try again.');
+    } finally {
       setLoading(false);
-      // Handle success/error
-    }, 1500);
+    }
   };
 
-  const handleSocialLogin = (provider: string) => {
-    // Handle social login
-    console.log(`Login with ${provider}`);
+  const handleSocialLogin = async (provider: string) => {
+    if (provider !== 'google') return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        }
+      });
+
+      if (error) {
+        setError(error.message);
+      }
+    } catch (err) {
+      setError('Failed to sign in with Google. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -213,9 +273,9 @@ export default function ImprovedLoginPage() {
               </div>
 
               <div className="text-sm">
-                <a href="/forgot-password" className="font-medium text-blue-600 hover:text-blue-500 transition-colors">
+                <Link href="/forgot-password" className="font-medium text-blue-600 hover:text-blue-500 transition-colors">
                   Forgot password?
-                </a>
+                </Link>
               </div>
             </div>
 

@@ -213,7 +213,7 @@ export default function ImprovedLoginPage() {
               </div>
 
               <div className="text-sm">
-                <a href="/reset-password" className="font-medium text-blue-600 hover:text-blue-500 transition-colors">
+                <a href="/forgot-password" className="font-medium text-blue-600 hover:text-blue-500 transition-colors">
                   Forgot password?
                 </a>
               </div>

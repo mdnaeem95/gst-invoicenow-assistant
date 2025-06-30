@@ -8,6 +8,7 @@ export async function GET(request: Request) {
   const next = searchParams.get('next') ?? '/dashboard'
   const error = searchParams.get('error')
   const error_description = searchParams.get('error_description')
+  const type = searchParams.get('type')
 
   // Handle errors
   if (error) {
@@ -22,13 +23,8 @@ export async function GET(request: Request) {
     const { data, error: sessionError } = await supabase.auth.exchangeCodeForSession(code)
     
     if (!sessionError && data?.session) {
-      // Check if this is a password recovery session
-      // When it's a recovery, we should redirect to reset-password page
-      const isRecovery = searchParams.get('type') === 'recovery' || 
-                        data.session.user?.app_metadata?.provider === 'email' &&
-                        data.session.user?.app_metadata?.providers?.includes('email')
-
-      if (isRecovery || next === '/reset-password') {
+      // Only redirect to reset-password for explicit recovery type
+      if (type === 'recovery') {
         // This is a password reset flow
         const forwardUrl = new URL(`${origin}/reset-password`)
         
@@ -39,7 +35,8 @@ export async function GET(request: Request) {
         return NextResponse.redirect(forwardUrl)
       }
       
-      // Regular sign in - redirect to intended destination
+      // For email confirmation (signup or invite), redirect to intended destination
+      // This handles both signup confirmation and regular sign in
       return NextResponse.redirect(`${origin}${next}`)
     }
     

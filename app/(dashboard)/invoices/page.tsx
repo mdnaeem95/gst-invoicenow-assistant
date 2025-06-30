@@ -32,6 +32,8 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { format } from 'date-fns'
+import { DeleteInvoiceModal } from '@/components/invoice/delete-invoice-modal'
+import { DownloadMenuItem } from '@/components/invoice/download-menu-item'
 
 export default async function InvoicesPage() {
   const supabase = await createClient()
@@ -186,14 +188,14 @@ export default async function InvoicesPage() {
                               </Link>
                             </DropdownMenuItem>
                             {invoice.converted_xml_url && (
-                              <DropdownMenuItem>
-                                <Download className="h-4 w-4 mr-2" />
-                                Download XML
-                              </DropdownMenuItem>
+                              <DownloadMenuItem xmlUrl={invoice.converted_xml_url} />
                             )}
-                            <DropdownMenuItem className="text-red-600">
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete
+                            <DropdownMenuItem asChild>
+                              <DeleteInvoiceModal 
+                                invoiceId={invoice.id} 
+                                invoiceNumber={invoice.invoice_number}
+                                variant="dropdown"
+                              />
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>

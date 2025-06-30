@@ -99,14 +99,16 @@ export async function POST(request: NextRequest) {
         console.error('Failed to upload original file:', uploadError)
       } else {
         // Get public URL
-        const { data: { publicUrl } } = supabase.storage
+        const { data: urlData } = supabase.storage
           .from('invoices')
           .getPublicUrl(originalFileName)
 
-        await supabase
-          .from('invoices')
-          .update({ original_file_url: publicUrl })
-          .eq('id', invoice.id)
+        if (urlData?.publicUrl) {
+          await supabase
+            .from('invoices')
+            .update({ original_file_url: urlData.publicUrl })
+            .eq('id', invoice.id)
+        }
       }
 
       // Parse the invoice
@@ -188,14 +190,16 @@ export async function POST(request: NextRequest) {
         })
 
       if (!xmlUploadError) {
-        const { data: { publicUrl: xmlUrl } } = supabase.storage
+        const { data: urlData } = supabase.storage
           .from('invoices')
           .getPublicUrl(xmlFileName)
 
-        await supabase
-          .from('invoices')
-          .update({ converted_xml_url: xmlUrl })
-          .eq('id', invoice.id)
+        if (urlData?.publicUrl) {
+          await supabase
+            .from('invoices')
+            .update({ converted_xml_url: urlData.publicUrl })
+            .eq('id', invoice.id)
+        }
       }
 
       return NextResponse.json({

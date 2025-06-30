@@ -8,6 +8,7 @@ import {
   ArrowLeft, 
   Download, 
   Send,
+  FileText,
   AlertCircle,
   CheckCircle,
   Clock,
@@ -16,6 +17,9 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { format } from 'date-fns'
+import { XMLPreviewModal } from '@/components/invoice/xml-preview-modal'
+import { DeleteInvoiceModal } from '@/components/invoice/delete-invoice-modal'
+import { DownloadXMLButton, DownloadOriginalButton } from '@/components/invoice/download-buttons'
 
 export default async function InvoiceDetailPage({ params }: { params: { id: string } }) {
   const supabase = await createClient()
@@ -85,10 +89,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
           
           <div className="flex gap-2">
             {invoice.converted_xml_url && (
-              <Button variant="outline">
-                <Download className="h-4 w-4 mr-2" />
-                Download XML
-              </Button>
+              <DownloadXMLButton xmlUrl={invoice.converted_xml_url} />
             )}
             {invoice.status === 'draft' && (
               <Button>
@@ -176,7 +177,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
                     </tr>
                   </thead>
                   <tbody>
-                    {invoice.items?.map((item, index) => (
+                    {invoice.items?.map((item: any) => (
                       <tr key={item.id} className="border-b">
                         <td className="py-3">{item.description}</td>
                         <td className="py-3 text-right">{item.quantity}</td>
@@ -222,16 +223,20 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
               <CardTitle>Quick Actions</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              <Button variant="outline" className="w-full justify-start">
-                <Eye className="h-4 w-4 mr-2" />
-                Preview XML
-              </Button>
-              {invoice.original_file_url && (
-                <Button variant="outline" className="w-full justify-start">
-                  <Download className="h-4 w-4 mr-2" />
-                  Download Original
-                </Button>
+              {invoice.converted_xml_url && (
+                <XMLPreviewModal 
+                  xmlUrl={invoice.converted_xml_url} 
+                  invoiceNumber={invoice.invoice_number}
+                />
               )}
+              {invoice.original_file_url && (
+                <DownloadOriginalButton fileUrl={invoice.original_file_url} />
+              )}
+              <DeleteInvoiceModal 
+                invoiceId={invoice.id} 
+                invoiceNumber={invoice.invoice_number}
+                variant="default"
+              />
             </CardContent>
           </Card>
 

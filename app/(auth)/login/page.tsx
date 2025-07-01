@@ -8,6 +8,7 @@ import { Mail, Lock, Eye, EyeOff, Loader2, AlertCircle, ArrowRight } from 'lucid
 
 export default function ImprovedLoginPage() {
   const [email, setEmail] = useState('');
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
@@ -89,19 +90,23 @@ export default function ImprovedLoginPage() {
       if (signInError) {
         if (signInError.message.includes('Invalid login credentials')) {
           setError('Invalid email or password. Please try again.');
+          setLoading(false);
         } else if (signInError.message.includes('Email not confirmed')) {
           setError('Please check your email and confirm your account before signing in.');
+          setLoading(false);
         } else {
           setError(signInError.message);
+          setLoading(false);
         }
       } else if (data?.user) {
-        // Success - redirect to dashboard
-        router.push('/dashboard');
-        router.refresh();
+        setIsRedirecting(true);
+
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        window.location.href = '/dashboard';
       }
     } catch (err) {
       setError('An unexpected error occurred. Please try again.');
-    } finally {
       setLoading(false);
     }
   };
@@ -298,6 +303,15 @@ export default function ImprovedLoginPage() {
               )}
             </button>
           </form>
+
+          {isRedirecting && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+              <div className="bg-white rounded-lg p-6 flex flex-col items-center space-y-4">
+                <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+                <p className="text-sm font-medium">Preparing your dashboard...</p>
+              </div>
+            </div>
+          )}
 
           {/* Sign Up Link */}
           <p className="mt-6 text-center text-sm text-gray-600">

@@ -1,3 +1,4 @@
+// lib/supabase/middleware.ts
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
@@ -31,35 +32,61 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // Define public routes that don't require authentication
-  const isAuthRoute = request.nextUrl.pathname.startsWith('/login') ||
-                     request.nextUrl.pathname.startsWith('/register') ||
-                     request.nextUrl.pathname.startsWith('/forgot-password') ||
-                     request.nextUrl.pathname.startsWith('/reset-password') ||
-                     request.nextUrl.pathname.startsWith('/auth')
+  const pathname = request.nextUrl.pathname
 
-  // Define protected routes that require authentication
-  const isProtectedRoute = request.nextUrl.pathname.startsWith('/dashboard') ||
-                          request.nextUrl.pathname.startsWith('/invoices') ||
-                          request.nextUrl.pathname.startsWith('/settings') ||
-                          request.nextUrl.pathname.startsWith('/analytics')
+  // Define route types
+  const isAuthRoute = pathname.startsWith('/login') ||
+                     pathname.startsWith('/register') ||
+                     pathname.startsWith('/forgot-password') ||
+                     pathname.startsWith('/reset-password') ||
+                     pathname.startsWith('/auth')
 
-  // Redirect to login if accessing protected route without auth
-  if (!user && isProtectedRoute) {
-    const url = request.nextUrl.clone()
-    url.pathname = '/login'
-    return NextResponse.redirect(url)
+  const isProtectedRoute = pathname.startsWith('/dashboard') ||
+                          pathname.startsWith('/invoices') ||
+                          pathname.startsWith('/settings') ||
+                          pathname.startsWith('/analytics')
+
+  const isSetupRoute = pathname.startsWith('/setup')
+
+  // Handle unauthenticated users
+  if (!user) {
+    // Redirect to login if accessing protected routes
+    if (isProtectedRoute || isSetupRoute) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/login'
+      return NextResponse.redirect(url)
+    }
+    return supabaseResponse
   }
 
-  // Redirect to dashboard if accessing auth routes while logged in
-  // But ALWAYS allow access to reset-password (even when logged in, for password change)
-  if (user && isAuthRoute && 
-      !request.nextUrl.pathname.startsWith('/auth/callback') &&
-      !request.nextUrl.pathname.startsWith('/reset-password') &&
-      !request.nextUrl.pathname.startsWith('/forgot-password')) {
-    const url = request.nextUrl.clone()
-    url.pathname = '/dashboard'
-    return NextResponse.redirect(url)
+  // Handle authenticated users
+  if (user) {
+    // Check if profile needs completion (but not if already on setup page)
+    if (!isSetupRoute && !isAuthRoute) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('company_uen')
+        .eq('id', user.id)
+        .single()
+      
+      console.log('Profile check:', profile) // Debug log
+      
+      // Redirect to setup if using temporary UEN
+      if (profile?.company_uen?.startsWith('TEMP') || profile?.company_uen?.startsWith('PENDING')) {
+        const url = request.nextUrl.clone()
+        url.pathname = '/setup'
+        return NextResponse.redirect(url)
+      }
+    }
+
+    // Redirect away from auth routes if already logged in
+    if (isAuthRoute && 
+        !pathname.startsWith('/auth/callback') &&
+        !pathname.startsWith('/reset-password')) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/dashboard'
+      return NextResponse.redirect(url)
+    }
   }
 
   return supabaseResponse

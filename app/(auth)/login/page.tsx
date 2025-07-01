@@ -122,15 +122,21 @@ export default function ImprovedLoginPage() {
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          },
         }
       });
 
       if (error) {
+        console.error('OAuth error:', error);
         setError(error.message);
+        setLoading(false);
       }
     } catch (err) {
+      console.error('Unexpected error:', err);
       setError('Failed to sign in with Google. Please try again.');
-    } finally {
       setLoading(false);
     }
   };

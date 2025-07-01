@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { format } from 'date-fns'
+import { redirect } from 'next/navigation'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -30,6 +31,13 @@ export default async function DashboardPage() {
     .select('*')
     .eq('id', user?.id)
     .single()
+
+  // Redirect to setup if using temporary UEN
+  if ((profile?.company_uen?.startsWith('TEMP') || 
+       profile?.company_uen?.startsWith('PENDING')) &&
+      !window?.location?.pathname?.includes('/setup')) {
+    redirect('/setup')
+  }
   
   // Get invoice statistics
   const { count: totalInvoices } = await supabase

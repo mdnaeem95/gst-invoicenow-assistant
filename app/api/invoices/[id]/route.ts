@@ -50,9 +50,10 @@ export async function GET(
 // DELETE invoice
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const supabase = await createClient()
     
     const { data: { user }, error: authError } = await supabase.auth.getUser()
@@ -68,7 +69,7 @@ export async function DELETE(
     const { data: invoice, error: fetchError } = await supabase
       .from('invoices')
       .select('id, user_id, original_file_url, converted_xml_url')
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('user_id', user.id)
       .single()
 
@@ -109,7 +110,7 @@ export async function DELETE(
     const { error: deleteError } = await supabase
       .from('invoices')
       .delete()
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('user_id', user.id)
 
     if (deleteError) {

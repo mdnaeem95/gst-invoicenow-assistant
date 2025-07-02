@@ -34,67 +34,92 @@ export async function updateSession(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname
 
-  // Route classifications
-  const publicRoutes = ['/', '/pricing', '/about']
-  const authRoutes = ['/login', '/register', '/forgot-password']
-  const protectedRoutes = ['/dashboard', '/invoices', '/analytics', '/settings']
-  const setupRoutes = ['/setup', '/verify-email']
-  
-  // Public routes - always accessible
-  if (publicRoutes.includes(pathname)) {
+  // Define route types
+  const isAuthRoute = pathname.startsWith('/login') ||
+                     pathname.startsWith('/register') ||
+                     pathname.startsWith('/forgot-password') ||
+                     pathname.startsWith('/reset-password') ||
+                     pathname.startsWith('/auth')
+
+  const isProtectedRoute = pathname.startsWith('/dashboard') ||
+                          pathname.startsWith('/invoices') ||
+                          pathname.startsWith('/settings') ||
+                          pathname.startsWith('/analytics')
+
+  const isSetupRoute = pathname.startsWith('/setup')
+  const isErrorPage = pathname.startsWith('/error')
+  const isVerifyEmailPage = pathname.startsWith('/verify-email')
+
+  // Always allow access to error page to prevent loops
+  if (isErrorPage) {
     return supabaseResponse
   }
-  
-  // Not authenticated
+
+  // Handle unauthenticated users
   if (!user) {
     // Allow access to auth routes
-    if (authRoutes.some(route => pathname.startsWith(route))) {
+    if (isAuthRoute) {
       return supabaseResponse
     }
     
-    // Redirect to login for protected/setup routes
-    if (protectedRoutes.some(route => pathname.startsWith(route)) || 
-        setupRoutes.some(route => pathname.startsWith(route))) {
-      return NextResponse.redirect(new URL('/login', request.url))
+    // Redirect to login if accessing protected routes
+    if (isProtectedRoute || isSetupRoute || isVerifyEmailPage) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/login'
+      return NextResponse.redirect(url)
     }
     
     return supabaseResponse
   }
-  
-  // Authenticated - get profile
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('email_verified, onboarding_completed, company_uen')
-    .eq('id', user.id)
-    .single()
-  
-  if (!profile) {
-    // Profile missing - critical error
-    return NextResponse.redirect(new URL('/error?code=profile_missing', request.url))
-  }
-  
-  // Email not verified
-  if (!profile.email_verified && !pathname.startsWith('/verify-email')) {
-    return NextResponse.redirect(new URL('/verify-email', request.url))
-  }
-  
-  // Onboarding not completed
-  if (!profile.onboarding_completed) {
-    // Allow access to setup routes
-    if (setupRoutes.some(route => pathname.startsWith(route))) {
+
+  // Handle authenticated users
+  if (user) {
+    // Skip profile check for auth callback to prevent loops
+    if (pathname.startsWith('/auth/callback')) {
       return supabaseResponse
     }
-    
-    // Redirect to setup for any other route
-    return NextResponse.redirect(new URL('/setup', request.url))
+
+    // Check if profile exists (but not if already on setup or verify-email page)
+    if (!isSetupRoute && !isAuthRoute && !isVerifyEmailPage) {
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('company_uen, email_verified, onboarding_completed')
+        .eq('id', user.id)
+        .single()
+      
+      if (profileError || !profile) {
+        console.log('Profile check failed:', profileError)
+        // Don't redirect to error, redirect to setup
+        const url = request.nextUrl.clone()
+        url.pathname = '/setup'
+        return NextResponse.redirect(url)
+      }
+      
+      // Check email verification
+      if (!profile.email_verified && !isVerifyEmailPage) {
+        const url = request.nextUrl.clone()
+        url.pathname = '/verify-email'
+        return NextResponse.redirect(url)
+      }
+      
+      // Check if needs setup
+      if (!profile.onboarding_completed && 
+          (profile.company_uen?.startsWith('TEMP') || profile.company_uen?.startsWith('PENDING'))) {
+        const url = request.nextUrl.clone()
+        url.pathname = '/setup'
+        return NextResponse.redirect(url)
+      }
+    }
+
+    // Redirect away from auth routes if already logged in
+    if (isAuthRoute && 
+        !pathname.startsWith('/auth/callback') &&
+        !pathname.startsWith('/reset-password')) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/dashboard'
+      return NextResponse.redirect(url)
+    }
   }
-  
-  // Fully authenticated and onboarded
-  // Redirect away from auth/setup routes
-  if (authRoutes.some(route => pathname.startsWith(route)) || 
-      pathname.startsWith('/setup')) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
-  }
-  
+
   return supabaseResponse
 }

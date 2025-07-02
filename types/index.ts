@@ -287,3 +287,49 @@ export interface Database {
     }
   }
 }
+
+export interface AuthProfile {
+  id: string
+  company_name: string
+  company_uen: string
+  company_address?: string
+  company_postal_code?: string
+  gst_number?: string
+  gst_registration_date?: string
+  contact_name: string
+  contact_email: string
+  contact_phone?: string
+  email_verified: boolean
+  onboarding_completed: boolean
+  onboarding_step: 'company_details' | 'gst_verification' | 'complete'
+  subscription_plan: 'trial' | 'starter' | 'professional' | 'business'
+  subscription_status: 'active' | 'cancelled' | 'expired' | 'suspended'
+  trial_ends_at: string
+  stripe_customer_id?: string
+  stripe_subscription_id?: string
+  notification_preferences: {
+    email: boolean
+    invoice_processed: boolean
+    invoice_failed: boolean
+    weekly_summary: boolean
+    compliance_alerts: boolean
+  }
+  invoices_processed: number
+  last_invoice_at?: string
+  storage_used_mb: number
+  created_at: string
+  updated_at: string
+  last_login_at?: string
+}
+
+export interface AuthUser extends AuthProfile {
+  email_confirmed_at?: string
+  user_metadata: {
+    company_name?: string
+    company_uen?: string
+    gst_number?: string
+    contact_name?: string
+    full_name?: string
+    onboarding_step?: string
+  }
+}

@@ -34,60 +34,67 @@ export async function updateSession(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname
 
-  // Define route types
-  const isAuthRoute = pathname.startsWith('/login') ||
-                     pathname.startsWith('/register') ||
-                     pathname.startsWith('/forgot-password') ||
-                     pathname.startsWith('/reset-password') ||
-                     pathname.startsWith('/auth')
-
-  const isProtectedRoute = pathname.startsWith('/dashboard') ||
-                          pathname.startsWith('/invoices') ||
-                          pathname.startsWith('/settings') ||
-                          pathname.startsWith('/analytics')
-
-  const isSetupRoute = pathname.startsWith('/setup')
-
-  // Handle unauthenticated users
-  if (!user) {
-    // Redirect to login if accessing protected routes
-    if (isProtectedRoute || isSetupRoute) {
-      const url = request.nextUrl.clone()
-      url.pathname = '/login'
-      return NextResponse.redirect(url)
-    }
+  // Route classifications
+  const publicRoutes = ['/', '/pricing', '/about']
+  const authRoutes = ['/login', '/register', '/forgot-password']
+  const protectedRoutes = ['/dashboard', '/invoices', '/analytics', '/settings']
+  const setupRoutes = ['/setup', '/verify-email']
+  
+  // Public routes - always accessible
+  if (publicRoutes.includes(pathname)) {
     return supabaseResponse
   }
-
-  // Handle authenticated users
-  if (user) {
-    // Check if profile needs completion (but not if already on setup page)
-    if (!isSetupRoute && !isAuthRoute) {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('company_uen')
-        .eq('id', user.id)
-        .single()
-      
-      console.log('Profile check:', profile) // Debug log
-      
-      // Redirect to setup if using temporary UEN
-      if (profile?.company_uen?.startsWith('TEMP') || profile?.company_uen?.startsWith('PENDING')) {
-        const url = request.nextUrl.clone()
-        url.pathname = '/setup'
-        return NextResponse.redirect(url)
-      }
+  
+  // Not authenticated
+  if (!user) {
+    // Allow access to auth routes
+    if (authRoutes.some(route => pathname.startsWith(route))) {
+      return supabaseResponse
     }
-
-    // Redirect away from auth routes if already logged in
-    if (isAuthRoute && 
-        !pathname.startsWith('/auth/callback') &&
-        !pathname.startsWith('/reset-password')) {
-      const url = request.nextUrl.clone()
-      url.pathname = '/dashboard'
-      return NextResponse.redirect(url)
+    
+    // Redirect to login for protected/setup routes
+    if (protectedRoutes.some(route => pathname.startsWith(route)) || 
+        setupRoutes.some(route => pathname.startsWith(route))) {
+      return NextResponse.redirect(new URL('/login', request.url))
     }
+    
+    return supabaseResponse
   }
-
+  
+  // Authenticated - get profile
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('email_verified, onboarding_completed, company_uen')
+    .eq('id', user.id)
+    .single()
+  
+  if (!profile) {
+    // Profile missing - critical error
+    return NextResponse.redirect(new URL('/error?code=profile_missing', request.url))
+  }
+  
+  // Email not verified
+  if (!profile.email_verified && !pathname.startsWith('/verify-email')) {
+    return NextResponse.redirect(new URL('/verify-email', request.url))
+  }
+  
+  // Onboarding not completed
+  if (!profile.onboarding_completed) {
+    // Allow access to setup routes
+    if (setupRoutes.some(route => pathname.startsWith(route))) {
+      return supabaseResponse
+    }
+    
+    // Redirect to setup for any other route
+    return NextResponse.redirect(new URL('/setup', request.url))
+  }
+  
+  // Fully authenticated and onboarded
+  // Redirect away from auth/setup routes
+  if (authRoutes.some(route => pathname.startsWith(route)) || 
+      pathname.startsWith('/setup')) {
+    return NextResponse.redirect(new URL('/dashboard', request.url))
+  }
+  
   return supabaseResponse
 }

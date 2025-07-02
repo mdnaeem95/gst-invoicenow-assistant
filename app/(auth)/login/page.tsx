@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Mail, Lock, Eye, EyeOff, Loader2, AlertCircle, ArrowRight } from 'lucide-react';
 
@@ -17,23 +16,22 @@ export default function ImprovedLoginPage() {
   const [fieldErrors, setFieldErrors] = useState<{email?: string; password?: string}>({});
   const [touched, setTouched] = useState<{email?: boolean; password?: boolean}>({});
   
-  const router = useRouter();
   const supabase = createClient();
 
   // Check for error messages in URL params
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const errorParam = urlParams.get('error');
+    const urlParams = new URLSearchParams(window.location.search)
+    const errorParam = urlParams.get('error')
     
     if (errorParam) {
       if (errorParam === 'auth_failed') {
-        setError('Authentication failed. Please try again.');
+        setError('Authentication failed. Please try again.')
       } else {
-        setError(decodeURIComponent(errorParam));
+        setError(decodeURIComponent(errorParam))
       }
       
       // Clean up URL
-      window.history.replaceState({}, '', '/login');
+      window.history.replaceState({}, '', '/login')
     }
   }, []);
 

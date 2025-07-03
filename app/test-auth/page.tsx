@@ -83,32 +83,41 @@ export default function EnhancedRegisterPage() {
     try {
       console.log('Submitting registration with data:', formData)
       
-      // Use our custom API endpoint instead of Supabase directly
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: formData.email,
-          password: formData.password,
-          fullName: formData.fullName,
-          companyName: formData.companyName,
-          metadata: {
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          data: {
+            full_name: formData.fullName,
+            contact_name: formData.fullName, // For compatibility
+            company_name: formData.companyName,
             privacy_policy_accepted: formData.privacyAccepted,
             terms_accepted: formData.termsAccepted,
             marketing_consent: formData.marketingConsent
           }
-        })
+        }
       })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Registration failed')
-      }
+      
+      if (signUpError) throw signUpError
       
       console.log('Registration successful:', data)
+      
+      // Log the signup action
+      if (data.user) {
+        try {
+          await supabase.rpc('log_user_action', {
+            p_action: 'user.registered',
+            p_metadata: {
+              email: formData.email,
+              company_name: formData.companyName
+            }
+          })
+        } catch (logError) {
+          console.error('Failed to log action:', logError)
+        }
+      }
+      
       setShowSuccess(true)
     } catch (err: any) {
       console.error('Registration error:', err)

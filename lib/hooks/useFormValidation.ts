@@ -2,20 +2,20 @@
 import { useState, useCallback } from 'react'
 
 interface ValidationRules {
-  [key: string]: (value: string) => string | null
+  [key: string]: (value: any) => string | null
 }
 
 interface UseFormValidationReturn<T> {
   values: T
   errors: Partial<Record<keyof T, string>>
   touched: Partial<Record<keyof T, boolean>>
-  handleChange: (name: keyof T, value: string) => void
+  handleChange: (name: keyof T, value: any) => void
   handleBlur: (name: keyof T) => void
   validateForm: () => boolean
   resetForm: () => void
 }
 
-export function useFormValidation<T extends Record<string, string>>(
+export function useFormValidation<T extends Record<string, any>>(
   initialValues: T,
   validationRules: ValidationRules
 ): UseFormValidationReturn<T> {
@@ -23,15 +23,15 @@ export function useFormValidation<T extends Record<string, string>>(
   const [errors, setErrors] = useState<Partial<Record<keyof T, string>>>({})
   const [touched, setTouched] = useState<Partial<Record<keyof T, boolean>>>({})
 
-  const validateField = useCallback((name: keyof T, value: string) => {
+  const validateField = useCallback((name: keyof T, value: any) => {
     const rule = validationRules[name as string]
     return rule ? rule(value) : null
   }, [validationRules])
 
-  const handleChange = useCallback((name: keyof T, value: string) => {
+  const handleChange = useCallback((name: keyof T, value: any) => {
     setValues(prev => ({ ...prev, [name]: value }))
     
-    // Clear error when user starts typing
+    // Clear error when user starts typing/changing
     if (errors[name]) {
       setErrors(prev => ({ ...prev, [name]: undefined }))
     }
@@ -61,6 +61,7 @@ export function useFormValidation<T extends Record<string, string>>(
     setErrors(newErrors)
     setTouched(Object.keys(values).reduce((acc, key) => ({ ...acc, [key]: true }), {}))
     
+    console.log('Validation result:', { isValid, errors: newErrors })
     return isValid
   }, [values, validationRules, validateField])
 

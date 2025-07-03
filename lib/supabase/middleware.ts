@@ -44,14 +44,20 @@ export async function updateSession(request: NextRequest) {
   const isProtectedRoute = pathname.startsWith('/dashboard') ||
                           pathname.startsWith('/invoices') ||
                           pathname.startsWith('/settings') ||
-                          pathname.startsWith('/analytics')
+                          pathname.startsWith('/analytics') ||
+                          pathname.startsWith('/billing')
+
+  const isPublicRoute = pathname === '/' ||
+                       pathname.startsWith('/terms') ||
+                       pathname.startsWith('/privacy') ||
+                       pathname.startsWith('/contact') ||
+                       pathname.startsWith('/api/public')
 
   const isSetupRoute = pathname.startsWith('/setup')
-  const isErrorPage = pathname.startsWith('/error')
   const isVerifyEmailPage = pathname.startsWith('/verify-email')
 
-  // Always allow access to error page to prevent loops
-  if (isErrorPage) {
+  // Allow public routes
+  if (isPublicRoute) {
     return supabaseResponse
   }
 
@@ -66,6 +72,7 @@ export async function updateSession(request: NextRequest) {
     if (isProtectedRoute || isSetupRoute || isVerifyEmailPage) {
       const url = request.nextUrl.clone()
       url.pathname = '/login'
+      url.searchParams.set('redirect', pathname)
       return NextResponse.redirect(url)
     }
     
@@ -74,50 +81,85 @@ export async function updateSession(request: NextRequest) {
 
   // Handle authenticated users
   if (user) {
-    // Skip profile check for auth callback to prevent loops
+    // Skip checks for auth callback
     if (pathname.startsWith('/auth/callback')) {
       return supabaseResponse
     }
 
-    // Check if profile exists (but not if already on setup or verify-email page)
-    if (!isSetupRoute && !isAuthRoute && !isVerifyEmailPage) {
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('company_uen, email_verified, onboarding_completed')
-        .eq('id', user.id)
-        .single()
-      
-      if (profileError || !profile) {
-        console.log('Profile check failed:', profileError)
-        // Don't redirect to error, redirect to setup
+    // Get profile for authenticated user
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single()
+    
+    // If no profile exists, redirect to setup
+    if (!profile && !isSetupRoute) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/setup'
+      return NextResponse.redirect(url)
+    }
+    
+    if (profile) {
+      // Check privacy policy acceptance (PDPA requirement)
+      if (!profile.privacy_policy_accepted && !isSetupRoute && !isAuthRoute) {
         const url = request.nextUrl.clone()
         url.pathname = '/setup'
+        url.searchParams.set('show_privacy', 'true')
         return NextResponse.redirect(url)
       }
       
       // Check email verification
-      if (!profile.email_verified && !isVerifyEmailPage) {
+      if (!profile.email_verified && 
+          !isVerifyEmailPage && 
+          !isSetupRoute && 
+          !isAuthRoute &&
+          user.app_metadata?.provider !== 'google') {
         const url = request.nextUrl.clone()
         url.pathname = '/verify-email'
         return NextResponse.redirect(url)
       }
       
-      // Check if needs setup
+      // Check if onboarding is complete
       if (!profile.onboarding_completed && 
-          (profile.company_uen?.startsWith('TEMP') || profile.company_uen?.startsWith('PENDING'))) {
+          !isSetupRoute && 
+          !isAuthRoute && 
+          !isVerifyEmailPage) {
         const url = request.nextUrl.clone()
         url.pathname = '/setup'
         return NextResponse.redirect(url)
       }
-    }
-
-    // Redirect away from auth routes if already logged in
-    if (isAuthRoute && 
-        !pathname.startsWith('/auth/callback') &&
-        !pathname.startsWith('/reset-password')) {
-      const url = request.nextUrl.clone()
-      url.pathname = '/dashboard'
-      return NextResponse.redirect(url)
+      
+      // Check if UEN is still temporary
+      if (profile.company_uen?.startsWith('TEMP') && 
+          !isSetupRoute && 
+          !isAuthRoute && 
+          !isVerifyEmailPage) {
+        const url = request.nextUrl.clone()
+        url.pathname = '/setup'
+        return NextResponse.redirect(url)
+      }
+      
+      // Redirect away from auth routes if already logged in and verified
+      if (isAuthRoute && 
+          profile.email_verified && 
+          profile.onboarding_completed &&
+          !pathname.startsWith('/auth/callback') &&
+          !pathname.startsWith('/reset-password')) {
+        const url = request.nextUrl.clone()
+        url.pathname = '/dashboard'
+        return NextResponse.redirect(url)
+      }
+      
+      // Redirect away from setup if already completed
+      if (isSetupRoute && 
+          profile.onboarding_completed && 
+          !profile.company_uen?.startsWith('TEMP') &&
+          !request.nextUrl.searchParams.get('show_privacy')) {
+        const url = request.nextUrl.clone()
+        url.pathname = '/dashboard'
+        return NextResponse.redirect(url)
+      }
     }
   }
 

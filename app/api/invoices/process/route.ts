@@ -1,13 +1,22 @@
+// app/api/invoices/process/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { InvoiceParser } from '@/lib/services/invoice-parser'
-import { InvoiceNowGenerator } from '@/lib/services/invoicenow-generator'
+import { InvoiceProcessingQueue } from '@/lib/services/queue/invoice-processor'
+import { v4 as uuidv4 } from 'uuid'
+
+// Initialize queue (in production, this would be a singleton)
+const processingQueue = new InvoiceProcessingQueue()
+
+// Start worker if not already running
+processingQueue.startWorker(parseInt(process.env.WORKER_CONCURRENCY || '3'))
 
 export async function POST(request: NextRequest) {
   try {
     // Get the uploaded file
     const formData = await request.formData()
     const file = formData.get('file') as File
+    const priority = formData.get('priority') as string || '0'
+    const autoFix = formData.get('autoFix') === 'true'
     
     if (!file) {
       return NextResponse.json(
@@ -16,24 +25,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Validate file type
-    const allowedTypes = [
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel'
-    ]
-    
-    if (!allowedTypes.includes(file.type)) {
+    // Validate file
+    const validationResult = validateFile(file)
+    if (!validationResult.isValid) {
       return NextResponse.json(
-        { success: false, error: 'Invalid file type. Please upload PDF or Excel files only.' },
-        { status: 400 }
-      )
-    }
-
-    // Validate file size (10MB limit)
-    if (file.size > 10 * 1024 * 1024) {
-      return NextResponse.json(
-        { success: false, error: 'File size exceeds 10MB limit' },
+        { success: false, error: validationResult.error },
         { status: 400 }
       )
     }
@@ -49,198 +45,207 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Get user profile for company data
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single()
+    // Check user's processing quota
+    const quotaCheck = await checkUserQuota(user.id)
+    if (!quotaCheck.allowed) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: quotaCheck.message,
+          quotaInfo: quotaCheck.quotaInfo 
+        },
+        { status: 429 }
+      )
+    }
 
-    // Create invoice record with processing status
+    // Create invoice record with initial status
+    const invoiceId = uuidv4()
     const { data: invoice, error: insertError } = await supabase
       .from('invoices')
       .insert({
+        id: invoiceId,
         user_id: user.id,
         status: 'processing',
         original_filename: file.name,
-        invoice_number: `TEMP-${Date.now()}`, // Temporary number
-        invoice_date: new Date().toISOString().split('T')[0], // Default to today
-        customer_name: 'Processing...', // Temporary placeholder
+        invoice_number: `PROCESSING-${Date.now()}`, // Temporary
+        invoice_date: new Date().toISOString().split('T')[0],
+        customer_name: 'Processing...',
         subtotal: 0,
         gst_amount: 0,
         total_amount: 0,
+        currency: 'SGD'
       })
       .select()
       .single()
 
     if (!invoice || insertError) {
       console.error('Failed to create invoice record:', insertError)
-      console.error('Insert error details:', insertError?.message, insertError?.details)
       return NextResponse.json(
-        { success: false, error: `Failed to create invoice record: ${insertError?.message || 'Unknown error'}` },
+        { success: false, error: 'Failed to create invoice record' },
         { status: 500 }
       )
     }
 
-    try {
-      // Convert file to buffer
-      const buffer = Buffer.from(await file.arrayBuffer())
-
-      // Upload original file to Supabase Storage
-      const originalFileName = `${user.id}/${invoice.id}/original-${file.name}`
-      const { error: uploadError } = await supabase.storage
-        .from('invoices')
-        .upload(originalFileName, buffer, {
-          contentType: file.type,
-          upsert: true
-        })
-
-      if (uploadError) {
-        console.error('Failed to upload original file:', uploadError)
-      } else {
-        // Get public URL
-        const { data: urlData } = supabase.storage
-          .from('invoices')
-          .getPublicUrl(originalFileName)
-
-        if (urlData?.publicUrl) {
-          await supabase
-            .from('invoices')
-            .update({ original_file_url: urlData.publicUrl })
-            .eq('id', invoice.id)
-        }
-      }
-
-      // Parse the invoice
-      const parser = new InvoiceParser()
-      const parsedData = await parser.parseFile(buffer, file.name, file.type)
-      
-      console.log('Parsed invoice data:', parsedData)
-
-      // Ensure we have valid data before updating
-      const updateData: any = {
-        invoice_number: parsedData.invoiceNumber || invoice.invoice_number,
-        invoice_date: parsedData.invoiceDate || new Date().toISOString().split('T')[0],
-        status: 'draft',
-      }
-
-      // Only add optional fields if they have values
-      if (parsedData.dueDate) updateData.due_date = parsedData.dueDate
-      if (parsedData.customerName) updateData.customer_name = parsedData.customerName
-      if (parsedData.customerUEN) updateData.customer_uen = parsedData.customerUEN
-      if (typeof parsedData.subtotal === 'number') updateData.subtotal = parsedData.subtotal
-      if (typeof parsedData.gstAmount === 'number') updateData.gst_amount = parsedData.gstAmount
-      if (typeof parsedData.totalAmount === 'number') updateData.total_amount = parsedData.totalAmount
-
-      console.log('Update data:', updateData)
-
-      // Update invoice with parsed data
-      const { data: updatedInvoice, error: updateError } = await supabase
-        .from('invoices')
-        .update(updateData)
-        .eq('id', invoice.id)
-        .select()
-        .single()
-
-      if (updateError) {
-        console.error('Failed to update invoice:', updateError)
-        console.error('Update error details:', updateError.message, updateError.details, updateError.hint)
-        throw new Error(`Failed to update invoice data: ${updateError.message}`)
-      }
-
-      console.log('Invoice updated successfully:', updatedInvoice)
-
-      // Insert line items
-      if (parsedData.items.length > 0) {
-        const items = parsedData.items.map((item, index) => ({
-          invoice_id: invoice.id,
-          description: item.description,
-          quantity: item.quantity,
-          unit_price: item.unitPrice,
-          amount: item.amount,
-          gst_rate: 9, // Default Singapore GST rate
-          line_number: index + 1,
-        }))
-
-        const { error: itemsError } = await supabase
-          .from('invoice_items')
-          .insert(items)
-
-        if (itemsError) {
-          console.error('Failed to insert items:', itemsError)
-        }
-      }
-
-      // Generate InvoiceNow XML
-      const generator = new InvoiceNowGenerator()
-      const xmlContent = generator.generateXML(parsedData, {
-        name: profile?.company_name || 'Company Name',
-        uen: profile?.company_uen || '12345678A',
-        address: profile?.company_address || 'Company Address',
-        gstNumber: profile?.gst_number || 'GST12345678',
+    // Upload file to storage
+    const fileBuffer = Buffer.from(await file.arrayBuffer())
+    const fileName = `${user.id}/${invoiceId}/original-${file.name}`
+    
+    const { error: uploadError } = await supabase.storage
+      .from('invoices')
+      .upload(fileName, fileBuffer, {
+        contentType: file.type,
+        upsert: true
       })
 
-      // Save XML file
-      const xmlFileName = `${user.id}/${invoice.id}/invoicenow-${parsedData.invoiceNumber}.xml`
-      const { error: xmlUploadError } = await supabase.storage
-        .from('invoices')
-        .upload(xmlFileName, Buffer.from(xmlContent), {
-          contentType: 'application/xml',
-          upsert: true
-        })
-
-      if (!xmlUploadError) {
-        const { data: urlData } = supabase.storage
-          .from('invoices')
-          .getPublicUrl(xmlFileName)
-
-        if (urlData?.publicUrl) {
-          await supabase
-            .from('invoices')
-            .update({ converted_xml_url: urlData.publicUrl })
-            .eq('id', invoice.id)
-        }
-      }
-
-      return NextResponse.json({
-        success: true,
-        invoice: {
-          id: invoice.id,
-          invoice_number: parsedData.invoiceNumber,
-          status: 'draft',
-        },
-        parsedData,
-      })
-
-    } catch (processingError) {
-      console.error('Processing error:', processingError)
+    if (uploadError) {
+      // Cleanup invoice record
+      await supabase.from('invoices').delete().eq('id', invoiceId)
       
-      // Update invoice status to failed
-      await supabase
-        .from('invoices')
-        .update({
-          status: 'failed',
-          error_message: processingError instanceof Error ? processingError.message : 'Processing failed'
-        })
-        .eq('id', invoice.id)
-
       return NextResponse.json(
-        { 
-          success: false, 
-          error: processingError instanceof Error ? processingError.message : 'Failed to process invoice'
-        },
+        { success: false, error: 'Failed to upload file' },
         { status: 500 }
       )
     }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from('invoices')
+      .getPublicUrl(fileName)
+
+    // Update invoice with file URL
+    await supabase
+      .from('invoices')
+      .update({ original_file_url: urlData.publicUrl })
+      .eq('id', invoiceId)
+
+    // Add to processing queue
+    const jobId = await processingQueue.addInvoice({
+      invoiceId,
+      userId: user.id,
+      fileUrl: urlData.publicUrl,
+      fileName: file.name,
+      mimeType: file.type,
+      options: {
+        priority: parseInt(priority),
+        autoFix,
+        preferredOCR: request.headers.get('X-Preferred-OCR') || undefined
+      }
+    })
+
+    // Log the upload action
+    await supabase
+      .from('invoice_processing_logs')
+      .insert({
+        invoice_id: invoiceId,
+        user_id: user.id,
+        action: 'upload',
+        status: 'completed',
+        details: {
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type,
+          jobId
+        }
+      })
+
+    return NextResponse.json({
+      success: true,
+      invoice: {
+        id: invoiceId,
+        status: 'processing',
+        jobId
+      },
+      message: 'Invoice queued for processing'
+    })
 
   } catch (error) {
     console.error('Unexpected error:', error)
     return NextResponse.json(
-      { 
-        success: false, 
-        error: 'An unexpected error occurred' 
-      },
+      { success: false, error: 'An unexpected error occurred' },
       { status: 500 }
     )
+  }
+}
+
+// Helper functions
+function validateFile(file: File): { isValid: boolean; error?: string } {
+  const allowedTypes = [
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'image/jpeg',
+    'image/png'
+  ]
+  
+  if (!allowedTypes.includes(file.type)) {
+    return { 
+      isValid: false, 
+      error: 'Invalid file type. Supported formats: PDF, Excel, JPEG, PNG' 
+    }
+  }
+
+  // 10MB limit
+  if (file.size > 10 * 1024 * 1024) {
+    return { 
+      isValid: false, 
+      error: 'File size exceeds 10MB limit' 
+    }
+  }
+
+  return { isValid: true }
+}
+
+async function checkUserQuota(userId: string): Promise<{
+  allowed: boolean
+  message?: string
+  quotaInfo?: any
+}> {
+  const supabase = await createClient()
+  
+  // Get user's subscription info
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('subscription_plan, subscription_status')
+    .eq('id', userId)
+    .single()
+
+  // Get current month's invoice count
+  const startOfMonth = new Date()
+  startOfMonth.setDate(1)
+  startOfMonth.setHours(0, 0, 0, 0)
+
+  const { count } = await supabase
+    .from('invoices')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .gte('created_at', startOfMonth.toISOString())
+
+  const quotaLimits = {
+    'starter': 50,
+    'professional': 200,
+    'business': -1 // Unlimited
+  }
+
+  const limit = quotaLimits[profile?.subscription_plan || 'starter']
+  
+  if (limit !== -1 && (count || 0) >= limit) {
+    return {
+      allowed: false,
+      message: `Monthly invoice limit reached (${count}/${limit})`,
+      quotaInfo: {
+        used: count,
+        limit,
+        plan: profile?.subscription_plan
+      }
+    }
+  }
+
+  return {
+    allowed: true,
+    quotaInfo: {
+      used: count || 0,
+      limit: limit === -1 ? 'Unlimited' : limit,
+      plan: profile?.subscription_plan
+    }
   }
 }

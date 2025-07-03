@@ -1,3 +1,4 @@
+// app/api/auth/register/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 
@@ -16,10 +17,9 @@ export async function POST(request: NextRequest) {
       metadata 
     } = body
 
-    // Create Supabase client
     const supabase = await createClient()
 
-    // Create user with ALL data
+    // Just use regular signUp - Supabase will send email via Resend SMTP
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
@@ -56,8 +56,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Supabase will send the verification email automatically
-    // No need for custom email here
+    // Log successful registration
+    console.log('User registered successfully:', authData.user?.id)
 
     return NextResponse.json({
       success: true,

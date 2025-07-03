@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Checkbox } from '@/components/ui/checkbox'
+import { createClient } from '@/lib/supabase/client'
 
 interface LoginForm {
   email: string
@@ -36,6 +37,7 @@ const validationRules = {
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const router = useRouter()
+  const supabase = createClient();
   const { loading, error, signIn, signInWithGoogle } = useAuth()
   
   const {
@@ -62,7 +64,22 @@ export default function LoginPage() {
 
     const success = await signIn(values.email as string, values.password as string)
     if (success) {
-      router.push('/dashboard')
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('email_verified, onboarding_completed')
+          .eq('id', user.id)
+          .single()
+
+        if (!profile?.email_verified) {
+          router.push('/verify-email')
+        } else if (!profile?.onboarding_completed) {
+          router.push('/setup')
+        } else {
+          router.push('/dashboard')
+        }
+      }
     }
   }
 

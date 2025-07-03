@@ -1,4 +1,3 @@
-// lib/supabase/middleware.ts
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
@@ -28,138 +27,36 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
+  const { data: { user } } = await supabase.auth.getUser()
   const pathname = request.nextUrl.pathname
 
-  // Define route types
-  const isAuthRoute = pathname.startsWith('/login') ||
-                     pathname.startsWith('/register') ||
-                     pathname.startsWith('/forgot-password') ||
-                     pathname.startsWith('/reset-password') ||
-                     pathname.startsWith('/auth')
+  // Public routes
+  const publicRoutes = ['/', '/login', '/register', '/forgot-password', '/reset-password', '/auth', '/api/auth', '/terms', '/privacy']
+  const isPublicRoute = publicRoutes.some(route => pathname.startsWith(route))
+  
+  // Protected routes
+  const protectedRoutes = ['/dashboard', '/invoices', '/settings', '/analytics', '/billing']
+  const isProtectedRoute = protectedRoutes.some(route => pathname.startsWith(route))
 
-  const isProtectedRoute = pathname.startsWith('/dashboard') ||
-                          pathname.startsWith('/invoices') ||
-                          pathname.startsWith('/settings') ||
-                          pathname.startsWith('/analytics') ||
-                          pathname.startsWith('/billing')
-
-  const isPublicRoute = pathname === '/' ||
-                       pathname.startsWith('/terms') ||
-                       pathname.startsWith('/privacy') ||
-                       pathname.startsWith('/contact') ||
-                       pathname.startsWith('/api/public')
-
-  const isSetupRoute = pathname.startsWith('/setup')
-  const isVerifyEmailPage = pathname.startsWith('/verify-email')
-
-  // Allow public routes
-  if (isPublicRoute) {
-    return supabaseResponse
+  // No user - redirect to login for protected routes
+  if (!user && isProtectedRoute) {
+    const url = request.nextUrl.clone()
+    url.pathname = '/login'
+    url.searchParams.set('redirect', pathname)
+    return NextResponse.redirect(url)
   }
 
-  // Handle unauthenticated users
-  if (!user) {
-    // Allow access to auth routes
-    if (isAuthRoute) {
-      return supabaseResponse
-    }
-    
-    // Redirect to login if accessing protected routes
-    if (isProtectedRoute || isSetupRoute || isVerifyEmailPage) {
-      const url = request.nextUrl.clone()
-      url.pathname = '/login'
-      url.searchParams.set('redirect', pathname)
-      return NextResponse.redirect(url)
-    }
-    
-    return supabaseResponse
-  }
-
-  // Handle authenticated users
-  if (user) {
-    // Skip checks for auth callback
-    if (pathname.startsWith('/auth/callback')) {
-      return supabaseResponse
-    }
-
-    // Get profile for authenticated user
+  // User exists and trying to access auth pages
+  if (user && (pathname.startsWith('/login') || pathname.startsWith('/register'))) {
+    // Check if user is fully verified
     const { data: profile } = await supabase
       .from('profiles')
-      .select('*')
+      .select('email_verified, onboarding_completed')
       .eq('id', user.id)
       .single()
     
-    // If no profile exists, redirect to setup
-    if (!profile && !isSetupRoute) {
-      const url = request.nextUrl.clone()
-      url.pathname = '/setup'
-      return NextResponse.redirect(url)
-    }
-    
-    if (profile) {
-      // Check privacy policy acceptance (PDPA requirement)
-      if (!profile.privacy_policy_accepted && !isSetupRoute && !isAuthRoute) {
-        const url = request.nextUrl.clone()
-        url.pathname = '/setup'
-        url.searchParams.set('show_privacy', 'true')
-        return NextResponse.redirect(url)
-      }
-      
-      // Check email verification
-      if (!profile.email_verified && 
-          !isVerifyEmailPage && 
-          !isSetupRoute && 
-          !isAuthRoute &&
-          user.app_metadata?.provider !== 'google') {
-        const url = request.nextUrl.clone()
-        url.pathname = '/verify-email'
-        return NextResponse.redirect(url)
-      }
-      
-      // Check if onboarding is complete
-      if (!profile.onboarding_completed && 
-          !isSetupRoute && 
-          !isAuthRoute && 
-          !isVerifyEmailPage) {
-        const url = request.nextUrl.clone()
-        url.pathname = '/setup'
-        return NextResponse.redirect(url)
-      }
-      
-      // Check if UEN is still temporary
-      if (profile.company_uen?.startsWith('TEMP') && 
-          !isSetupRoute && 
-          !isAuthRoute && 
-          !isVerifyEmailPage) {
-        const url = request.nextUrl.clone()
-        url.pathname = '/setup'
-        return NextResponse.redirect(url)
-      }
-      
-      // Redirect away from auth routes if already logged in and verified
-      if (isAuthRoute && 
-          profile.email_verified && 
-          profile.onboarding_completed &&
-          !pathname.startsWith('/auth/callback') &&
-          !pathname.startsWith('/reset-password')) {
-        const url = request.nextUrl.clone()
-        url.pathname = '/dashboard'
-        return NextResponse.redirect(url)
-      }
-      
-      // Redirect away from setup if already completed
-      if (isSetupRoute && 
-          profile.onboarding_completed && 
-          !profile.company_uen?.startsWith('TEMP') &&
-          !request.nextUrl.searchParams.get('show_privacy')) {
-        const url = request.nextUrl.clone()
-        url.pathname = '/dashboard'
-        return NextResponse.redirect(url)
-      }
+    if (profile?.email_verified && profile?.onboarding_completed) {
+      return NextResponse.redirect(new URL('/dashboard', request.url))
     }
   }
 

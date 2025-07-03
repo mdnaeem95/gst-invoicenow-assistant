@@ -59,6 +59,7 @@ export function useAuth(): UseAuthReturn {
     }
   }
 
+  // In the signIn function, add better error handling:
   const signIn = async (email: string, password: string): Promise<boolean> => {
     setLoading(true)
     setError(null)
@@ -70,24 +71,28 @@ export function useAuth(): UseAuthReturn {
       })
 
       if (error) {
-        setError(handleAuthError(error))
-        await logAuthAction('auth.login_failed', { email, reason: error.message })
+        // Specific error messages
+        if (error.message.includes('Invalid login credentials')) {
+          setError('Invalid email or password. Please try again.')
+        } else if (error.message.includes('Email not confirmed')) {
+          setError('Please verify your email before signing in.')
+        } else if (error.message.includes('too many requests')) {
+          setError('Too many login attempts. Please try again later.')
+        } else {
+          setError(error.message)
+        }
         return false
       }
 
       if (data.user) {
         setUser(data.user)
-        
-        // Update last login
-        await supabase.rpc('update_last_login')
-        
-        // Log successful login
-        await logAuthAction('auth.login_success', { email })
+        return true
       }
 
-      return true
+      return false
     } catch (err) {
-      setError('An unexpected error occurred')
+      console.error('Login error:', err)
+      setError('An unexpected error occurred. Please try again.')
       return false
     } finally {
       setLoading(false)
